@@ -27,6 +27,8 @@ See [Platform support](#platform-support).
   format so MP3 encoding does not clip.
 - **Device switching at runtime** — Auto / GPU / CPU, without restarting.
 - **CLI and benchmark scripts** for scripted generation and hardware testing.
+- **MCP server** — expose generation to Claude Desktop, Claude Code and other
+  MCP clients as a tool. See [Use as an MCP server](#use-as-an-mcp-server).
 
 ## Platform support
 
@@ -216,10 +218,94 @@ python benchmark.py --steps 30 --dtype float16    # see it break on ROCm
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MOSS_DEVICE` | `auto` | Force `cuda`, `mps` or `cpu` (CLI scripts only) |
+| `MOSS_DEVICE` | `auto` | Force `cuda`, `mps` or `cpu` (CLI scripts and MCP server) |
 | `MOSS_DTYPE` | auto | Force a dtype, e.g. `float32`. Overrides the safe default |
 | `MOSS_CPU_VAE` | `1` on ROCm, else `0` | Run the VAE decoder on CPU (see below) |
 | `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL` | `1` | Hardware SDPA on ROCm — big speedup |
+
+---
+
+## Use as an MCP server
+
+[`mcp_server.py`](mcp_server.py) exposes generation over the
+[Model Context Protocol](https://modelcontextprotocol.io), so any MCP client —
+Claude Desktop, Claude Code, Cursor, Cline — can create sound effects by
+calling a tool. It reuses the same pipeline, device/dtype selection and
+ROCm/MPS fixes as the CLI, so everything on this page (`bfloat16` on GPU,
+CPU-VAE on ROCm, the `MOSS_*` environment variables) applies unchanged.
+
+The model (~11 GB) loads **lazily on the first tool call**, not at server
+startup, and then stays resident — so the first effect is slow and the rest are
+fast, exactly like the desktop app.
+
+### 1. Install the MCP SDK
+
+One extra dependency, on top of the normal [install](#install):
+
+```bash
+pip install "mcp[cli]"
+```
+
+### 2. Register the server with your client
+
+**Claude Desktop / Claude Code** — add this to the MCP config
+(`claude_desktop_config.json`, or `claude mcp add-json`), using **absolute
+paths** to the venv's Python and to `mcp_server.py`:
+
+```json
+{
+  "mcpServers": {
+    "moss-soundeffect": {
+      "command": "/absolute/path/to/MOSS-SoundEffect_v2.0_MPS_ROCm/venv/bin/python",
+      "args": ["/absolute/path/to/MOSS-SoundEffect_v2.0_MPS_ROCm/mcp_server.py"],
+      "env": {
+        "MOSS_DEVICE": "auto"
+      }
+    }
+  }
+}
+```
+
+On Windows the `command` is `...\venv\Scripts\python.exe`. The `env` block is
+optional — add `MOSS_DTYPE`, `MOSS_CPU_VAE`, etc. from the table above to
+override the auto-detected defaults.
+
+With Claude Code you can register it in one line:
+
+```bash
+claude mcp add moss-soundeffect -- /absolute/path/to/venv/bin/python /absolute/path/to/mcp_server.py
+```
+
+### 3. Use it
+
+Restart the client and ask it, in plain language, for a sound —
+*"generate a 5-second sound of a heavy door creaking open"*. The client calls
+the tool; the finished file lands in `outputs/`, named after the prompt, and
+the tool returns its path.
+
+### The tool
+
+| Tool | `generate_sound_effect` |
+|---|---|
+| `prompt` | Text description of the sound (English or Chinese — the model's training languages) |
+| `seconds` | Clip length, `0 < seconds <= 30` (default `5.0`) |
+| `steps` | Diffusion steps (default `50`) |
+| `cfg` | Prompt adherence (default `4.0`) |
+| `seed` | Fix for a reproducible result (default random) |
+| `format` | `"wav"` or `"mp3"` (default `"wav"`) |
+
+It returns the output path, the parameters used, and the generation time.
+
+### Running it directly
+
+To try the server without a client — e.g. with the MCP Inspector — run it by
+hand. Default transport is stdio; set `MOSS_MCP_TRANSPORT=sse` for HTTP/SSE:
+
+```bash
+python mcp_server.py                 # stdio
+mcp dev mcp_server.py                # stdio + web Inspector
+MOSS_MCP_TRANSPORT=sse python mcp_server.py   # HTTP/SSE on :8000
+```
 
 ---
 
@@ -332,6 +418,7 @@ the load happens in the background at startup.
 ```
 app.py               Tkinter GUI — model loading, generation, playback
 generate.py          Single-shot CLI generation
+mcp_server.py        MCP server — generation exposed as a tool for MCP clients
 benchmark.py         Speed + output-sanity measurement
 download_model.py    Fetches the weights from Hugging Face
 i18n.py              UI strings for en / ru / zh, system language detection
