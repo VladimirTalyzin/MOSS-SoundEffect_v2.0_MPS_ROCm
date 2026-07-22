@@ -1,0 +1,16 @@
+# Application dependencies.
+#
+# Install PyTorch FIRST — it is platform-specific and must come from the
+# matching wheel index. See README.md ("Install") for the exact commands.
+
+# MOSS-SoundEffect v2 inference pipeline, pinned to the upstream commit this
+# app was built against. Pulls in transformers, diffusers, descript-audiotools
+# and the rest of the model stack.
+-e git+https://github.com/OpenMOSS/MOSS-TTS.git@ad99ec5f26debf1d6c1a4dc8461b2bcb787ec9af#egg=moss_soundeffect_v2&subdirectory=moss_soundeffect_v2
+
+# WAV/MP3 I/O. The wheel bundles libsndfile >= 1.1, which is what makes
+# MP3 writing possible without a separate FFmpeg install.
+soundfile==0.13.1
+
+# Weight download helper (download_model.py).
+huggingface_hub==0.36.2

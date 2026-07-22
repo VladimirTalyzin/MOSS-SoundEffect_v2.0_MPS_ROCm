@@ -1,0 +1,38 @@
+# Virtual environments
+venv/
+venv-*/
+.venv/
+env/
+
+# Upstream MOSS-TTS checkout — installed from GitHub, see requirements.txt.
+# MOSS-TTS/ is a manual clone; src/ is where pip puts editable VCS installs.
+MOSS-TTS/
+src/
+
+# Model weights (~11 GB), fetched by download_model.py
+models/
+
+# Generated audio
+outputs/
+
+# Local UI state written by the app on first run
+settings.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
