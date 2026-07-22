@@ -21,6 +21,7 @@ import torch
 
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
+import mps_compat
 import rocm_compat
 
 rocm_compat.apply()
@@ -68,8 +69,8 @@ def main() -> None:
     torch.set_num_threads(os.cpu_count() or 8)
 
     t0 = time.time()
-    pipe = MossSoundEffectPipeline.from_pretrained(
-        str(MODEL_DIR), torch_dtype=dtype, device=device
+    pipe = mps_compat.load_pipeline(
+        MossSoundEffectPipeline, str(MODEL_DIR), dtype, device
     )
     print(f"load: {time.time() - t0:.1f}s")
 

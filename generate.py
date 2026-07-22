@@ -15,6 +15,7 @@ import soundfile as sf
 
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
+import mps_compat
 import rocm_compat
 
 rocm_compat.apply()
@@ -67,8 +68,8 @@ def main() -> None:
 
     device, dtype = resolve_device_dtype()
     t0 = time.time()
-    pipe = MossSoundEffectPipeline.from_pretrained(
-        str(MODEL_DIR), torch_dtype=dtype, device=device
+    pipe = mps_compat.load_pipeline(
+        MossSoundEffectPipeline, str(MODEL_DIR), dtype, device
     )
     print(f"[load] {device}/{str(dtype).split('.')[-1]} {time.time() - t0:.1f}s", file=sys.stderr)
 

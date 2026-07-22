@@ -388,6 +388,7 @@ class App:
                     f"{MODEL_DIR}\n\npython download_model.py"
                 )
             import torch
+            import mps_compat
             import rocm_compat
 
             rocm_compat.apply()  # заглушки torch.distributed для ROCm-сборки
@@ -418,8 +419,8 @@ class App:
                 dtype = torch.float32 if device == "cpu" else torch.bfloat16
 
             t0 = time.time()
-            pipe = MossSoundEffectPipeline.from_pretrained(
-                str(MODEL_DIR), torch_dtype=dtype, device=device
+            pipe = mps_compat.load_pipeline(
+                MossSoundEffectPipeline, str(MODEL_DIR), dtype, device
             )
 
             # На ROCm VAE на GPU и медленнее CPU (MIOpen fallback-солвер), и
