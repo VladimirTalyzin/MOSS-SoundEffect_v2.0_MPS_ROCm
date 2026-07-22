@@ -7,9 +7,11 @@ get a sound effect. Everything runs locally — no API keys, no uploads.
 
 The upstream project ships CUDA-oriented scripts and a Gradio demo. This
 repository adds what was missing for the hardware I actually use: a native
-Tkinter window, a working **AMD ROCm** path on Windows, and the fixes needed to
-get there. **Apple Silicon (MPS)** support is wired up but not yet verified —
-see [Platform support](#platform-support).
+Tkinter window, a working **AMD ROCm** path on Windows, and a working
+**Apple Silicon (MPS)** path on macOS, plus the fixes needed to get to both.
+See [Platform support](#platform-support).
+
+![The MOSS-SoundEffect desktop window on macOS, model loaded on MPS](docs/screenshot.png)
 
 ---
 
@@ -32,16 +34,31 @@ see [Platform support](#platform-support).
 |---|---|---|
 | Windows + AMD Radeon (ROCm) | `cuda` (ROCm build) | Tested — primary development target |
 | Windows / Linux + NVIDIA | `cuda` | Should work; untested |
-| macOS + Apple Silicon | `mps` | Wired up, **not yet verified** |
+| macOS + Apple Silicon | `mps` | Tested — see [MPS notes](#mps-notes) |
 | Any | `cpu` | Tested (slow — see [Performance](#performance)) |
 
-Developed on an AMD Radeon 8060S (Strix Halo, `gfx1151`) under Windows 11 with
-Python 3.12. Porting to a Mac mini M4 Pro is the next step, which is why the
-MPS paths are already in place.
+Developed on an AMD Radeon 8060S (Strix Halo, `gfx1151`) under Windows 11 and
+verified on an Apple M4 Pro (macOS 26, `bfloat16`), both on Python 3.12.
 
 ---
 
 ## Install
+
+### Requirements
+
+- **Python 3.12** — required by the upstream package. Other versions will fail
+  to resolve dependencies.
+- **git** — the model pipeline is installed straight from a GitHub commit.
+- **~13 GB free disk** — 11 GB of weights plus the PyTorch/dependency stack.
+- **RAM/VRAM:** the 1.3B model needs roughly 8–10 GB. On Apple Silicon this
+  comes out of unified memory, so 16 GB is comfortable and 8 GB is tight.
+- **Platform toolchain:**
+  - *macOS:* Apple Silicon (M1 or newer) and **macOS 14+** for stable
+    `bfloat16` on MPS. A Python with working Tcl/Tk — see the note below.
+  - *Windows + AMD:* Adrenalin driver **26.2.2 or newer** for the ROCm wheels.
+
+The whole thing runs offline after the weights are downloaded — no API keys,
+no account, nothing is uploaded.
 
 ### 1. Clone and create a virtual environment
 
@@ -55,6 +72,14 @@ python -m venv venv
 
 Activate it: `venv\Scripts\activate` (Windows) or `source venv/bin/activate`
 (macOS/Linux).
+
+> **macOS:** the desktop app uses Tkinter, which needs a Python built with a
+> working Tcl/Tk. The python.org installer and Homebrew's
+> `python-tk@3.12` both provide it; the standalone builds used by `pyenv` and
+> `uv` often do **not** (`import tkinter` succeeds but `tk.Tk()` fails with
+> *"Can't find a usable init.tcl"*). The CLI (`generate.py`, `benchmark.py`)
+> has no such requirement. With Homebrew:
+> `brew install python@3.12 python-tk@3.12`.
 
 ### 2. Install PyTorch for your hardware
 
@@ -108,7 +133,41 @@ git-ignored here.
 python download_model.py
 ```
 
-Files go to `models/MOSS-SoundEffect-v2.0/`, which is also git-ignored.
+Files go to `models/MOSS-SoundEffect-v2.0/`, which is also git-ignored. The
+download resumes if interrupted; to speed it up, `pip install hf_transfer` and
+set `HF_HUB_ENABLE_HF_TRANSFER=1` before running.
+
+### 5. Verify it works
+
+`benchmark.py` loads the model, runs a few steps, and checks the output for
+NaN/silence — the fastest way to confirm your GPU path is healthy:
+
+```bash
+python benchmark.py --steps 10 --seconds 3
+```
+
+You want `nan/inf: False` and a non-zero `audio peak`. On an M4 Pro this prints
+about `2.1 s/step` on `mps`; anything with `nan/inf: True` means the dtype is
+wrong for your hardware (see [ROCm notes](#rocm-notes) / [MPS notes](#mps-notes)).
+
+---
+
+## macOS quick start (Apple Silicon)
+
+The whole sequence in one place, using Homebrew's Tk-capable Python:
+
+```bash
+brew install python@3.12 python-tk@3.12
+git clone https://github.com/VladimirTalyzin/MOSS-SoundEffect_v2.0_MPS_ROCm.git
+cd MOSS-SoundEffect_v2.0_MPS_ROCm
+/opt/homebrew/bin/python3.12 -m venv venv
+source venv/bin/activate
+pip install torch torchaudio          # default macOS wheels include MPS
+pip install -r requirements.txt
+python download_model.py              # ~11 GB, one time
+python benchmark.py --steps 10        # sanity check → nan/inf: False
+python app.py                         # launch the desktop app
+```
 
 ---
 
@@ -213,6 +272,61 @@ default on ROCm only; set `MOSS_CPU_VAE=1` to try it elsewhere.
 
 ---
 
+## MPS notes
+
+Apple's Metal backend is stricter about numeric types than CUDA, so two things
+had to be worked out to get this model running on Apple Silicon. Both are
+handled automatically by [`mps_compat.py`](mps_compat.py); this section records
+why.
+
+**1. RoPE frequency buffers are `complex128`; MPS has no `float64`.** The DiT
+registers its rotary-embedding tables (`freqs_cis_*`) as `complex128` — a pair
+of `float64` values. Moving the model to `mps` therefore fails outright with
+*"Cannot convert a MPS Tensor to float64 dtype"*, before a single step runs.
+The attention code only ever reads `freqs.real` / `freqs.imag` (cosines and
+sines in `[-1, 1]`) and does no complex arithmetic, so the pipeline is loaded on
+CPU, its `float64`/`complex128` tensors are narrowed to `float32`/`complex64`,
+and only then moved to the GPU.
+
+**2. The timestep embedding is computed in `float64`.** `sinusoidal_embedding_1d`
+hard-casts to `float64` on every denoising step. That is fine on CUDA but fatal
+on MPS, so a `float32` equivalent is patched in for the MPS path only — the
+positions involved are small and `float32` is more than precise enough. CUDA and
+ROCm keep the original `float64` version untouched.
+
+Unlike ROCm, the VAE decoder runs cleanly in `bfloat16` on MPS (no NaN, no
+20× slowdown), so `MOSS_CPU_VAE` stays off by default here.
+
+---
+
+## Troubleshooting
+
+**`_tkinter.TclError: Can't find a usable init.tcl` (macOS).** Your Python has
+`tkinter` but no working Tcl/Tk runtime — common with `pyenv` and `uv`
+standalone builds. Use the python.org installer or Homebrew's
+`python@3.12` + `python-tk@3.12` and recreate the venv with that interpreter.
+The CLI scripts are unaffected.
+
+**`benchmark.py` prints `nan/inf: True` or a near-zero `audio peak`.** The dtype
+is wrong for your GPU. Let the default (`bfloat16` on GPU) stand rather than
+forcing `float16`; if it persists, try `MOSS_DTYPE=float32`, and on ROCm confirm
+the VAE is on CPU (it is by default).
+
+**`FileNotFoundError` mentioning `models/MOSS-SoundEffect-v2.0`.** The weights
+are not downloaded yet — run `python download_model.py`.
+
+**"CUDA is not available. Disabling autocast" in the console.** Harmless on
+Apple Silicon — the upstream pipeline hard-codes a few `autocast("cuda")`
+blocks; they are no-ops on MPS and the output is correct. These are silenced on
+the MPS path but may surface from other tools.
+
+**First generation is slow, later ones are fast.** Expected — the model loads
+once (~15–60 s depending on disk) and then stays resident. In the desktop app
+the load happens in the background at startup.
+
+**Out of memory / very slow on an 8 GB Mac.** Switch the device selector to
+**CPU (fallback)**, or reduce **Diffusion steps** and **Duration**.
+
 ## Project layout
 
 ```
@@ -224,6 +338,7 @@ i18n.py              UI strings for en / ru / zh, system language detection
 naming.py            Prompt-to-filename slugs, JSON settings storage
 platform_compat.py   Audio preview, file manager, HiDPI — per OS
 rocm_compat.py       torch.distributed stubs, CPU-VAE fallback
+mps_compat.py        float64/complex128 → MPS-safe dtypes, load helper
 ```
 
 Runtime state that is deliberately **not** in the repository: `models/`
